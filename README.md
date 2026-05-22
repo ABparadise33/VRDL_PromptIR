@@ -150,42 +150,5 @@ PY
 Expected output: `100` files, each array with shape `(3, H, W)` and dtype
 `uint8`.
 
-## Train
-
-From this directory:
-
-```bash
-python train.py \
-  --dataset-root ../hw4_realse_dataset \
-  --output-dir runs/promptir_baseline \
-  --epochs 120 \
-  --batch-size 8 \
-  --patch-size 128
-```
-
-Use a smaller batch size if the GPU runs out of memory.
-
-Training writes `metrics.csv` and `loss_curve.png` under the output directory.
-
-## Inference And Submission
-
-```bash
-python infer.py \
-  --dataset-root ../hw4_realse_dataset \
-  --checkpoint runs/promptir_baseline/best.pt \
-  --output pred.npz
-```
-
-If full-image inference runs out of memory, use tiling:
-
-```bash
-python infer.py \
-  --dataset-root ../hw4_realse_dataset \
-  --checkpoint runs/promptir_baseline/best.pt \
-  --output pred.npz \
-  --tile-size 256 \
-  --tile-overlap 32
-```
-
 The generated `pred.npz` uses the required format: each key is the original test
 filename, and each value is a restored `uint8` image array with shape `(3, H, W)`.
