@@ -14,11 +14,16 @@ from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from promptir.data import HW4RainSnowTrainDataset
+from promptir.data import (
+    HW4RainSnowTrainDataset,
+    HW4RainSnowValDataset,
+    build_paired_samples,
+    split_train_val_samples,
+)
 from promptir.model import PromptIR
 
 
-METRIC_FIELDS = ["epoch", "train_l1", "lr", "steps"]
+METRIC_FIELDS = ["epoch", "train_l1", "val_psnr", "lr", "steps"]
 
 
 class LinearWarmupCosineAnnealingLR(_LRScheduler):
@@ -83,6 +88,9 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--warmup-epochs", type=int, default=15)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--val-ratio", type=float, default=0.1)
+    parser.add_argument("--val-batch-size", type=int, default=1)
+    parser.add_argument("--val-max-images", type=int, default=0)
     parser.add_argument("--save-every", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", default=None)
@@ -114,10 +122,10 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def save_checkpoint(path, model, optimizer, scheduler, epoch, args, best_loss):
+def save_checkpoint(path, model, optimizer, scheduler, epoch, args, best_psnr):
     checkpoint = {
         "epoch": epoch,
-        "best_loss": best_loss,
+        "best_psnr": best_psnr,
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),
         "scheduler_state": scheduler.state_dict(),
@@ -140,6 +148,11 @@ def load_metric_history(path, before_epoch):
                     {
                         "epoch": epoch,
                         "train_l1": float(row["train_l1"]),
+                        "val_psnr": (
+                            float(row["val_psnr"])
+                            if row.get("val_psnr") not in (None, "")
+                            else None
+                        ),
                         "lr": float(row["lr"]),
                         "steps": int(row["steps"]),
                     }
@@ -186,6 +199,93 @@ def plot_loss_curve(path, history):
     plt.close()
 
 
+def plot_psnr_curve(path, history):
+    cache_dir = path.parent / ".matplotlib_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(cache_dir))
+    os.environ.setdefault("XDG_CACHE_HOME", str(cache_dir))
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from matplotlib import pyplot as plt
+    except ImportError:
+        print("matplotlib is not installed; skipped PSNR curve plotting.")
+        return
+
+    points = [
+        (row["epoch"], row.get("val_psnr"))
+        for row in history
+        if row.get("val_psnr") is not None
+    ]
+    if not points:
+        return
+
+    epochs, psnrs = zip(*points)
+    plt.figure(figsize=(8, 5))
+    plt.plot(epochs, psnrs, marker="o", linewidth=1.8)
+    plt.xlabel("Epoch")
+    plt.ylabel("Validation PSNR (dB)")
+    plt.title("PromptIR Validation PSNR")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+    plt.savefig(path, dpi=200)
+    plt.close()
+
+
+def pad_to_multiple(input_tensor, multiple=8):
+    height, width = input_tensor.shape[-2:]
+    padded_h = ((height + multiple - 1) // multiple) * multiple
+    padded_w = ((width + multiple - 1) // multiple) * multiple
+    pad_h = padded_h - height
+    pad_w = padded_w - width
+    if pad_h == 0 and pad_w == 0:
+        return input_tensor, height, width
+    padded = torch.nn.functional.pad(input_tensor, (0, pad_w, 0, pad_h), mode="reflect")
+    return padded, height, width
+
+
+def batch_psnr(restored, clean):
+    restored = restored.detach().clamp(0.0, 1.0)
+    clean = clean.detach().clamp(0.0, 1.0)
+    mse = torch.mean((restored - clean) ** 2, dim=(1, 2, 3))
+    psnr = torch.where(
+        mse == 0,
+        torch.full_like(mse, float("inf")),
+        -10.0 * torch.log10(mse),
+    )
+    return psnr
+
+
+def validate(model, loader, device, max_images=0):
+    if loader is None:
+        return None
+
+    model.eval()
+    psnr_sum = 0.0
+    image_count = 0
+    with torch.no_grad():
+        progress = tqdm(loader, desc="Validate", leave=False)
+        for names, degraded, clean in progress:
+            del names
+            degraded = degraded.to(device, non_blocking=True)
+            clean = clean.to(device, non_blocking=True)
+            padded, height, width = pad_to_multiple(degraded)
+            restored = model(padded)[..., :height, :width]
+            psnrs = batch_psnr(restored, clean)
+            psnr_sum += psnrs.sum().item()
+            image_count += psnrs.numel()
+            progress.set_postfix(psnr=f"{psnr_sum / image_count:.2f}")
+            if 0 < max_images <= image_count:
+                break
+
+    model.train()
+    if image_count == 0:
+        return None
+    return psnr_sum / image_count
+
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -193,11 +293,20 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    all_samples = build_paired_samples(args.dataset_root)
+    train_samples, val_samples = split_train_val_samples(
+        all_samples,
+        val_ratio=args.val_ratio,
+        seed=args.seed,
+    )
+
     dataset = HW4RainSnowTrainDataset(
         args.dataset_root,
         patch_size=args.patch_size,
         augment=not args.no_augment,
+        samples=train_samples,
     )
+    val_dataset = HW4RainSnowValDataset(val_samples) if val_samples else None
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -206,6 +315,15 @@ def main():
         pin_memory=device.type == "cuda",
         drop_last=True,
     )
+    val_loader = None
+    if val_dataset is not None:
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=args.val_batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=device.type == "cuda",
+        )
 
     model = PromptIR(decoder=True).to(device)
     loss_fn = nn.L1Loss()
@@ -226,19 +344,27 @@ def main():
 
     metrics_path = output_dir / "metrics.csv"
     loss_curve_path = output_dir / "loss_curve.png"
+    psnr_curve_path = output_dir / "psnr_curve.png"
     metric_history = load_metric_history(metrics_path, before_epoch=start_epoch)
     if args.resume is not None:
-        best_loss = checkpoint.get("best_loss")
+        best_psnr = checkpoint.get("best_psnr")
     else:
-        best_loss = None
-    if best_loss is None and metric_history:
-        best_loss = min(row["train_l1"] for row in metric_history)
+        best_psnr = None
+    if best_psnr is None and metric_history:
+        val_psnrs = [
+            row["val_psnr"]
+            for row in metric_history
+            if row.get("val_psnr") is not None
+        ]
+        best_psnr = max(val_psnrs) if val_psnrs else None
 
     print(f"Device: {device}")
     print(f"Training pairs: {len(dataset)}")
+    print(f"Validation pairs: {len(val_dataset) if val_dataset is not None else 0}")
     print(f"Checkpoints: {output_dir}")
     print(f"Metrics: {metrics_path}")
     print(f"Loss curve: {loss_curve_path}")
+    print(f"PSNR curve: {psnr_curve_path}")
 
     for epoch in range(start_epoch, args.epochs + 1):
         model.train()
@@ -264,23 +390,34 @@ def main():
 
         scheduler.step()
         epoch_loss = running_loss / max(1, step_count)
+        val_psnr = validate(
+            model,
+            val_loader,
+            device,
+            max_images=args.val_max_images,
+        )
         lr = optimizer.param_groups[0]["lr"]
-        print(f"Epoch {epoch}: train_l1={epoch_loss:.6f}, lr={lr:.8f}")
+        val_text = f", val_psnr={val_psnr:.4f}" if val_psnr is not None else ""
+        print(f"Epoch {epoch}: train_l1={epoch_loss:.6f}{val_text}, lr={lr:.8f}")
 
         metric_history.append(
             {
                 "epoch": epoch,
                 "train_l1": epoch_loss,
+                "val_psnr": val_psnr,
                 "lr": lr,
                 "steps": step_count,
             }
         )
         save_metric_history(metrics_path, metric_history)
         plot_loss_curve(loss_curve_path, metric_history)
+        plot_psnr_curve(psnr_curve_path, metric_history)
 
-        is_best = best_loss is None or epoch_loss < best_loss
+        is_best = val_psnr is not None and (
+            best_psnr is None or val_psnr > best_psnr
+        )
         if is_best:
-            best_loss = epoch_loss
+            best_psnr = val_psnr
             save_checkpoint(
                 output_dir / "best.pt",
                 model,
@@ -288,7 +425,7 @@ def main():
                 scheduler,
                 epoch,
                 args,
-                best_loss,
+                best_psnr,
             )
 
         save_checkpoint(
@@ -298,7 +435,7 @@ def main():
             scheduler,
             epoch,
             args,
-            best_loss,
+            best_psnr,
         )
         if epoch % args.save_every == 0:
             save_checkpoint(
@@ -308,7 +445,7 @@ def main():
                 scheduler,
                 epoch,
                 args,
-                best_loss,
+                best_psnr,
             )
 
 

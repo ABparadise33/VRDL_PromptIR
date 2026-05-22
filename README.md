@@ -81,6 +81,10 @@ python train.py \
   --device cuda
 ```
 
+By default, 10% of the training pairs are held out for validation PSNR after
+each epoch. Change this with `--val-ratio`; set `--val-ratio 0` to disable
+validation.
+
 Resume training from the latest checkpoint:
 
 ```bash
@@ -104,11 +108,12 @@ runs/promptir_baseline/epoch_010.pt
 runs/promptir_baseline/epoch_020.pt
 runs/promptir_baseline/metrics.csv
 runs/promptir_baseline/loss_curve.png
+runs/promptir_baseline/psnr_curve.png
 ```
 
 By default, `latest.pt` is overwritten every epoch, `best.pt` is overwritten
-when train L1 loss improves, and numbered checkpoints are saved every 10 epochs.
-Change the interval with `--save-every`.
+when validation PSNR improves, and numbered checkpoints are saved every 10
+epochs. Change the interval with `--save-every`.
 
 ### 5. Generate `pred.npz`
 
