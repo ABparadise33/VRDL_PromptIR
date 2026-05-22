@@ -59,10 +59,25 @@ print("gpu:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else No
 PY
 ```
 
-### 4. Upload the HW4 dataset
+### 4. Download the HW4 dataset
 
-Do not commit the dataset to GitHub. Upload it directly to the instance from
-your local machine:
+Do not commit the dataset to GitHub. Download it directly on the Vast.ai
+instance with the provided Google Drive link:
+
+```bash
+python -m pip install gdown
+gdown --fuzzy "https://drive.google.com/file/d/1bEIU9TZVQa-AF_z6JkOKaGp4wYGnqQ8w/view?usp=drive_link" -O hw4_realse_dataset.zip
+unzip hw4_realse_dataset.zip
+```
+
+If the zip extracts into a nested directory, move or rename it so the final
+dataset path is `hw4_realse_dataset`:
+
+```bash
+find . -maxdepth 3 -type d | sort | head -50
+```
+
+As an alternative, upload the dataset from your local machine:
 
 ```bash
 scp -P <PORT> -r /path/to/hw4_realse_dataset root@<HOST>:/workspace/VRDL_PromptIR/
