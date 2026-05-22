@@ -86,7 +86,14 @@ def tile_forward(model, input_tensor, tile_size, tile_overlap):
 
 def load_model(checkpoint_path, device):
     model = PromptIR(decoder=True).to(device)
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    try:
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location=device,
+            weights_only=False,
+        )
+    except TypeError:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
     state = checkpoint.get("model_state", checkpoint)
     if "state_dict" in state:
         state = state["state_dict"]

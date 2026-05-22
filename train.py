@@ -336,7 +336,14 @@ def main():
 
     start_epoch = 1
     if args.resume is not None:
-        checkpoint = torch.load(args.resume, map_location=device)
+        try:
+            checkpoint = torch.load(
+                args.resume,
+                map_location=device,
+                weights_only=False,
+            )
+        except TypeError:
+            checkpoint = torch.load(args.resume, map_location=device)
         model.load_state_dict(checkpoint["model_state"])
         optimizer.load_state_dict(checkpoint["optimizer_state"])
         scheduler.load_state_dict(checkpoint["scheduler_state"])
