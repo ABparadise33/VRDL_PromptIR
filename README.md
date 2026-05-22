@@ -66,7 +66,7 @@ instance with the provided Google Drive link:
 
 ```bash
 python -m pip install gdown
-gdown --fuzzy "https://drive.google.com/file/d/1bEIU9TZVQa-AF_z6JkOKaGp4wYGnqQ8w/view?usp=drive_link" -O hw4_realse_dataset.zip
+gdown 1bEIU9TZVQa-AF_z6JkOKaGp4wYGnqQ8w -O hw4_realse_dataset.zip
 unzip hw4_realse_dataset.zip
 ```
 
