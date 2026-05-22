@@ -1,0 +1,5 @@
+einops
+numpy
+Pillow
+torch
+tqdm
