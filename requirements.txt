@@ -1,4 +1,5 @@
 einops
+matplotlib
 numpy
 Pillow
 torch

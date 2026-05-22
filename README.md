@@ -159,6 +159,13 @@ Detach from tmux with `Ctrl-b`, then `d`. Reattach later with:
 tmux attach -t promptir
 ```
 
+Training writes the epoch loss log and the report-ready loss curve here:
+
+```text
+runs/promptir_baseline/metrics.csv
+runs/promptir_baseline/loss_curve.png
+```
+
 ### 7. Generate `pred.npz`
 
 Run inference with the trained checkpoint:
@@ -205,6 +212,8 @@ From your local machine:
 
 ```bash
 scp -P <PORT> root@<HOST>:/workspace/VRDL_PromptIR/pred.npz .
+scp -P <PORT> root@<HOST>:/workspace/VRDL_PromptIR/runs/promptir_baseline/loss_curve.png .
+scp -P <PORT> root@<HOST>:/workspace/VRDL_PromptIR/runs/promptir_baseline/metrics.csv .
 ```
 
 ## Train
@@ -221,6 +230,8 @@ python train.py \
 ```
 
 Use a smaller batch size if the GPU runs out of memory.
+
+Training writes `metrics.csv` and `loss_curve.png` under the output directory.
 
 ## Inference And Submission
 

@@ -1,6 +1,8 @@
 """Train the unmodified PromptIR baseline on the HW4 rain/snow dataset."""
 
 import argparse
+import csv
+import os
 from pathlib import Path
 import random
 
@@ -14,6 +16,9 @@ from tqdm import tqdm
 
 from promptir.data import HW4RainSnowTrainDataset
 from promptir.model import PromptIR
+
+
+METRIC_FIELDS = ["epoch", "train_l1", "lr", "steps"]
 
 
 class LinearWarmupCosineAnnealingLR(_LRScheduler):
@@ -120,6 +125,66 @@ def save_checkpoint(path, model, optimizer, scheduler, epoch, args):
     torch.save(checkpoint, path)
 
 
+def load_metric_history(path, before_epoch):
+    if not path.exists():
+        return []
+
+    history = []
+    with path.open("r", newline="") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            epoch = int(row["epoch"])
+            if epoch < before_epoch:
+                history.append(
+                    {
+                        "epoch": epoch,
+                        "train_l1": float(row["train_l1"]),
+                        "lr": float(row["lr"]),
+                        "steps": int(row["steps"]),
+                    }
+                )
+    return history
+
+
+def save_metric_history(path, history):
+    with path.open("w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=METRIC_FIELDS)
+        writer.writeheader()
+        writer.writerows(history)
+
+
+def plot_loss_curve(path, history):
+    cache_dir = path.parent / ".matplotlib_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(cache_dir))
+    os.environ.setdefault("XDG_CACHE_HOME", str(cache_dir))
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from matplotlib import pyplot as plt
+    except ImportError:
+        print("matplotlib is not installed; skipped loss curve plotting.")
+        return
+
+    if not history:
+        return
+
+    epochs = [row["epoch"] for row in history]
+    losses = [row["train_l1"] for row in history]
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(epochs, losses, marker="o", linewidth=1.8)
+    plt.xlabel("Epoch")
+    plt.ylabel("Train L1 Loss")
+    plt.title("PromptIR Training Loss")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+    plt.savefig(path, dpi=200)
+    plt.close()
+
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -158,9 +223,15 @@ def main():
         scheduler.load_state_dict(checkpoint["scheduler_state"])
         start_epoch = int(checkpoint["epoch"]) + 1
 
+    metrics_path = output_dir / "metrics.csv"
+    loss_curve_path = output_dir / "loss_curve.png"
+    metric_history = load_metric_history(metrics_path, before_epoch=start_epoch)
+
     print(f"Device: {device}")
     print(f"Training pairs: {len(dataset)}")
     print(f"Checkpoints: {output_dir}")
+    print(f"Metrics: {metrics_path}")
+    print(f"Loss curve: {loss_curve_path}")
 
     for epoch in range(start_epoch, args.epochs + 1):
         model.train()
@@ -184,12 +255,25 @@ def main():
             if 0 < args.max_steps_per_epoch <= step:
                 break
 
-        scheduler.step(epoch)
+        scheduler.step()
         epoch_loss = running_loss / max(1, step_count)
         lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch}: train_l1={epoch_loss:.6f}, lr={lr:.8f}")
 
-        save_checkpoint(output_dir / "latest.pt", model, optimizer, scheduler, epoch, args)
+        metric_history.append(
+            {
+                "epoch": epoch,
+                "train_l1": epoch_loss,
+                "lr": lr,
+                "steps": step_count,
+            }
+        )
+        save_metric_history(metrics_path, metric_history)
+        plot_loss_curve(loss_curve_path, metric_history)
+
+        save_checkpoint(
+            output_dir / "latest.pt", model, optimizer, scheduler, epoch, args
+        )
         if epoch % args.save_every == 0:
             save_checkpoint(
                 output_dir / f"epoch_{epoch:03d}.pt",
