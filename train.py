@@ -83,7 +83,7 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--warmup-epochs", type=int, default=15)
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--save-every", type=int, default=1)
+    parser.add_argument("--save-every", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", default=None)
     parser.add_argument(
@@ -114,9 +114,10 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def save_checkpoint(path, model, optimizer, scheduler, epoch, args):
+def save_checkpoint(path, model, optimizer, scheduler, epoch, args, best_loss):
     checkpoint = {
         "epoch": epoch,
+        "best_loss": best_loss,
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),
         "scheduler_state": scheduler.state_dict(),
@@ -226,6 +227,12 @@ def main():
     metrics_path = output_dir / "metrics.csv"
     loss_curve_path = output_dir / "loss_curve.png"
     metric_history = load_metric_history(metrics_path, before_epoch=start_epoch)
+    if args.resume is not None:
+        best_loss = checkpoint.get("best_loss")
+    else:
+        best_loss = None
+    if best_loss is None and metric_history:
+        best_loss = min(row["train_l1"] for row in metric_history)
 
     print(f"Device: {device}")
     print(f"Training pairs: {len(dataset)}")
@@ -271,8 +278,27 @@ def main():
         save_metric_history(metrics_path, metric_history)
         plot_loss_curve(loss_curve_path, metric_history)
 
+        is_best = best_loss is None or epoch_loss < best_loss
+        if is_best:
+            best_loss = epoch_loss
+            save_checkpoint(
+                output_dir / "best.pt",
+                model,
+                optimizer,
+                scheduler,
+                epoch,
+                args,
+                best_loss,
+            )
+
         save_checkpoint(
-            output_dir / "latest.pt", model, optimizer, scheduler, epoch, args
+            output_dir / "latest.pt",
+            model,
+            optimizer,
+            scheduler,
+            epoch,
+            args,
+            best_loss,
         )
         if epoch % args.save_every == 0:
             save_checkpoint(
@@ -282,6 +308,7 @@ def main():
                 scheduler,
                 epoch,
                 args,
+                best_loss,
             )
 
 

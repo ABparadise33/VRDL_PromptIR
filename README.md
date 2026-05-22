@@ -162,9 +162,17 @@ tmux attach -t promptir
 Training writes the epoch loss log and the report-ready loss curve here:
 
 ```text
+runs/promptir_baseline/latest.pt
+runs/promptir_baseline/best.pt
+runs/promptir_baseline/epoch_010.pt
+runs/promptir_baseline/epoch_020.pt
 runs/promptir_baseline/metrics.csv
 runs/promptir_baseline/loss_curve.png
 ```
+
+By default, `latest.pt` is overwritten every epoch, `best.pt` is overwritten
+when train L1 loss improves, and numbered checkpoints are saved every 10 epochs.
+Change the interval with `--save-every`.
 
 ### 7. Generate `pred.npz`
 
@@ -173,7 +181,7 @@ Run inference with the trained checkpoint:
 ```bash
 python infer.py \
   --dataset-root hw4_realse_dataset \
-  --checkpoint runs/promptir_baseline/latest.pt \
+  --checkpoint runs/promptir_baseline/best.pt \
   --output pred.npz \
   --device cuda
 ```
@@ -183,7 +191,7 @@ If inference runs out of memory, use tiled inference:
 ```bash
 python infer.py \
   --dataset-root hw4_realse_dataset \
-  --checkpoint runs/promptir_baseline/latest.pt \
+  --checkpoint runs/promptir_baseline/best.pt \
   --output pred.npz \
   --device cuda \
   --tile-size 256 \
@@ -238,7 +246,7 @@ Training writes `metrics.csv` and `loss_curve.png` under the output directory.
 ```bash
 python infer.py \
   --dataset-root ../hw4_realse_dataset \
-  --checkpoint runs/promptir_baseline/latest.pt \
+  --checkpoint runs/promptir_baseline/best.pt \
   --output pred.npz
 ```
 
@@ -247,7 +255,7 @@ If full-image inference runs out of memory, use tiling:
 ```bash
 python infer.py \
   --dataset-root ../hw4_realse_dataset \
-  --checkpoint runs/promptir_baseline/latest.pt \
+  --checkpoint runs/promptir_baseline/best.pt \
   --output pred.npz \
   --tile-size 256 \
   --tile-overlap 32
