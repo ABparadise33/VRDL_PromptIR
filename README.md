@@ -115,6 +115,13 @@ By default, `latest.pt` is overwritten every epoch, `best.pt` is overwritten
 when validation PSNR improves, and numbered checkpoints are saved every 10
 epochs. Change the interval with `--save-every`.
 
+`metrics.csv` records overall validation PSNR plus separate rain/snow validation
+PSNR columns:
+
+```text
+epoch,train_l1,val_psnr,val_psnr_rain,val_psnr_snow,lr,steps
+```
+
 ### 5. Generate `pred.npz`
 
 Run inference with the trained checkpoint:

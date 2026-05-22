@@ -23,7 +23,15 @@ from promptir.data import (
 from promptir.model import PromptIR
 
 
-METRIC_FIELDS = ["epoch", "train_l1", "val_psnr", "lr", "steps"]
+METRIC_FIELDS = [
+    "epoch",
+    "train_l1",
+    "val_psnr",
+    "val_psnr_rain",
+    "val_psnr_snow",
+    "lr",
+    "steps",
+]
 
 
 class LinearWarmupCosineAnnealingLR(_LRScheduler):
@@ -153,6 +161,16 @@ def load_metric_history(path, before_epoch):
                             if row.get("val_psnr") not in (None, "")
                             else None
                         ),
+                        "val_psnr_rain": (
+                            float(row["val_psnr_rain"])
+                            if row.get("val_psnr_rain") not in (None, "")
+                            else None
+                        ),
+                        "val_psnr_snow": (
+                            float(row["val_psnr_snow"])
+                            if row.get("val_psnr_snow") not in (None, "")
+                            else None
+                        ),
                         "lr": float(row["lr"]),
                         "steps": int(row["steps"]),
                     }
@@ -214,20 +232,32 @@ def plot_psnr_curve(path, history):
         print("matplotlib is not installed; skipped PSNR curve plotting.")
         return
 
-    points = [
-        (row["epoch"], row.get("val_psnr"))
-        for row in history
-        if row.get("val_psnr") is not None
+    curves = [
+        ("val_psnr", "Overall"),
+        ("val_psnr_rain", "Rain"),
+        ("val_psnr_snow", "Snow"),
     ]
-    if not points:
+    has_points = any(
+        row.get(key) is not None for key, _ in curves for row in history
+    )
+    if not has_points:
         return
 
-    epochs, psnrs = zip(*points)
     plt.figure(figsize=(8, 5))
-    plt.plot(epochs, psnrs, marker="o", linewidth=1.8)
+    for key, label in curves:
+        points = [
+            (row["epoch"], row.get(key))
+            for row in history
+            if row.get(key) is not None
+        ]
+        if not points:
+            continue
+        epochs, psnrs = zip(*points)
+        plt.plot(epochs, psnrs, marker="o", linewidth=1.8, label=label)
     plt.xlabel("Epoch")
     plt.ylabel("Validation PSNR (dB)")
     plt.title("PromptIR Validation PSNR")
+    plt.legend()
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.tight_layout()
     plt.savefig(path, dpi=200)
@@ -258,32 +288,63 @@ def batch_psnr(restored, clean):
     return psnr
 
 
+def degradation_from_name(name):
+    if name.startswith("rain"):
+        return "rain"
+    if name.startswith("snow"):
+        return "snow"
+    return "unknown"
+
+
+def format_optional(value):
+    return f"{value:.4f}" if value is not None else "n/a"
+
+
 def validate(model, loader, device, max_images=0):
     if loader is None:
         return None
 
     model.eval()
-    psnr_sum = 0.0
-    image_count = 0
+    psnr_sums = {"all": 0.0, "rain": 0.0, "snow": 0.0}
+    image_counts = {"all": 0, "rain": 0, "snow": 0}
     with torch.no_grad():
         progress = tqdm(loader, desc="Validate", leave=False)
         for names, degraded, clean in progress:
-            del names
             degraded = degraded.to(device, non_blocking=True)
             clean = clean.to(device, non_blocking=True)
             padded, height, width = pad_to_multiple(degraded)
             restored = model(padded)[..., :height, :width]
             psnrs = batch_psnr(restored, clean)
-            psnr_sum += psnrs.sum().item()
-            image_count += psnrs.numel()
-            progress.set_postfix(psnr=f"{psnr_sum / image_count:.2f}")
-            if 0 < max_images <= image_count:
+            for name, psnr in zip(names, psnrs):
+                value = psnr.item()
+                degradation = degradation_from_name(name)
+                psnr_sums["all"] += value
+                image_counts["all"] += 1
+                if degradation in ("rain", "snow"):
+                    psnr_sums[degradation] += value
+                    image_counts[degradation] += 1
+            progress.set_postfix(
+                psnr=f"{psnr_sums['all'] / image_counts['all']:.2f}"
+            )
+            if 0 < max_images <= image_counts["all"]:
                 break
 
     model.train()
-    if image_count == 0:
+    if image_counts["all"] == 0:
         return None
-    return psnr_sum / image_count
+    return {
+        "val_psnr": psnr_sums["all"] / image_counts["all"],
+        "val_psnr_rain": (
+            psnr_sums["rain"] / image_counts["rain"]
+            if image_counts["rain"] > 0
+            else None
+        ),
+        "val_psnr_snow": (
+            psnr_sums["snow"] / image_counts["snow"]
+            if image_counts["snow"] > 0
+            else None
+        ),
+    }
 
 
 def main():
@@ -397,14 +458,21 @@ def main():
 
         scheduler.step()
         epoch_loss = running_loss / max(1, step_count)
-        val_psnr = validate(
+        val_metrics = validate(
             model,
             val_loader,
             device,
             max_images=args.val_max_images,
         )
+        val_psnr = val_metrics["val_psnr"] if val_metrics is not None else None
         lr = optimizer.param_groups[0]["lr"]
-        val_text = f", val_psnr={val_psnr:.4f}" if val_psnr is not None else ""
+        val_text = ""
+        if val_metrics is not None:
+            val_text = (
+                f", val_psnr={format_optional(val_metrics['val_psnr'])}"
+                f", rain={format_optional(val_metrics['val_psnr_rain'])}"
+                f", snow={format_optional(val_metrics['val_psnr_snow'])}"
+            )
         print(f"Epoch {epoch}: train_l1={epoch_loss:.6f}{val_text}, lr={lr:.8f}")
 
         metric_history.append(
@@ -412,6 +480,16 @@ def main():
                 "epoch": epoch,
                 "train_l1": epoch_loss,
                 "val_psnr": val_psnr,
+                "val_psnr_rain": (
+                    val_metrics["val_psnr_rain"]
+                    if val_metrics is not None
+                    else None
+                ),
+                "val_psnr_snow": (
+                    val_metrics["val_psnr_snow"]
+                    if val_metrics is not None
+                    else None
+                ),
                 "lr": lr,
                 "steps": step_count,
             }
