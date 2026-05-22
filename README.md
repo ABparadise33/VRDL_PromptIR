@@ -81,6 +81,21 @@ python train.py \
   --device cuda
 ```
 
+To run the PSNR-oriented loss experiment, keep a separate output directory:
+
+```bash
+python train.py \
+  --dataset-root hw4_realse_dataset \
+  --output-dir runs/promptir_l1_mse \
+  --epochs 120 \
+  --batch-size 4 \
+  --patch-size 128 \
+  --num-workers 4 \
+  --device cuda \
+  --loss-type l1_mse \
+  --mse-weight 1.0
+```
+
 By default, 10% of the training pairs are held out for validation PSNR after
 each epoch. Change this with `--val-ratio`; set `--val-ratio 0` to disable
 validation.
@@ -119,7 +134,7 @@ epochs. Change the interval with `--save-every`.
 PSNR columns:
 
 ```text
-epoch,train_l1,val_psnr,val_psnr_rain,val_psnr_snow,lr,steps
+epoch,train_loss,train_l1,train_mse,val_psnr,val_psnr_rain,val_psnr_snow,lr,steps
 ```
 
 ### 5. Generate `pred.npz`

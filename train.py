@@ -8,7 +8,6 @@ import random
 
 import numpy as np
 import torch
-from torch import nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader
@@ -25,7 +24,9 @@ from promptir.model import PromptIR
 
 METRIC_FIELDS = [
     "epoch",
+    "train_loss",
     "train_l1",
+    "train_mse",
     "val_psnr",
     "val_psnr_rain",
     "val_psnr_snow",
@@ -95,6 +96,12 @@ def parse_args():
     parser.add_argument("--patch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--warmup-epochs", type=int, default=15)
+    parser.add_argument(
+        "--loss-type",
+        default="l1",
+        choices=["l1", "l1_mse", "mse"],
+    )
+    parser.add_argument("--mse-weight", type=float, default=1.0)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--val-batch-size", type=int, default=1)
@@ -143,6 +150,7 @@ def save_checkpoint(path, model, optimizer, scheduler, epoch, args, best_psnr):
 
 
 def load_metric_history(path, before_epoch):
+    path = Path(path)
     if not path.exists():
         return []
 
@@ -155,7 +163,17 @@ def load_metric_history(path, before_epoch):
                 history.append(
                     {
                         "epoch": epoch,
+                        "train_loss": (
+                            float(row["train_loss"])
+                            if row.get("train_loss") not in (None, "")
+                            else float(row["train_l1"])
+                        ),
                         "train_l1": float(row["train_l1"]),
+                        "train_mse": (
+                            float(row["train_mse"])
+                            if row.get("train_mse") not in (None, "")
+                            else None
+                        ),
                         "val_psnr": (
                             float(row["val_psnr"])
                             if row.get("val_psnr") not in (None, "")
@@ -185,6 +203,20 @@ def save_metric_history(path, history):
         writer.writerows(history)
 
 
+def compute_loss(restored, clean, loss_type, mse_weight):
+    l1_loss = torch.nn.functional.l1_loss(restored, clean)
+    mse_loss = torch.nn.functional.mse_loss(restored, clean)
+    if loss_type == "l1":
+        loss = l1_loss
+    elif loss_type == "l1_mse":
+        loss = l1_loss + mse_weight * mse_loss
+    elif loss_type == "mse":
+        loss = mse_loss
+    else:
+        raise ValueError(f"Unsupported loss type: {loss_type}")
+    return loss, l1_loss, mse_loss
+
+
 def plot_loss_curve(path, history):
     cache_dir = path.parent / ".matplotlib_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -204,12 +236,15 @@ def plot_loss_curve(path, history):
         return
 
     epochs = [row["epoch"] for row in history]
-    losses = [row["train_l1"] for row in history]
+    losses = [
+        row.get("train_loss") if row.get("train_loss") is not None else row["train_l1"]
+        for row in history
+    ]
 
     plt.figure(figsize=(8, 5))
     plt.plot(epochs, losses, marker="o", linewidth=1.8)
     plt.xlabel("Epoch")
-    plt.ylabel("Train L1 Loss")
+    plt.ylabel("Train Loss")
     plt.title("PromptIR Training Loss")
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.tight_layout()
@@ -387,7 +422,6 @@ def main():
         )
 
     model = PromptIR(decoder=True).to(device)
-    loss_fn = nn.L1Loss()
     optimizer = AdamW(model.parameters(), lr=args.lr)
     scheduler = LinearWarmupCosineAnnealingLR(
         optimizer=optimizer,
@@ -433,10 +467,13 @@ def main():
     print(f"Metrics: {metrics_path}")
     print(f"Loss curve: {loss_curve_path}")
     print(f"PSNR curve: {psnr_curve_path}")
+    print(f"Loss type: {args.loss_type}, mse_weight: {args.mse_weight}")
 
     for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         running_loss = 0.0
+        running_l1 = 0.0
+        running_mse = 0.0
         step_count = 0
         progress = tqdm(loader, desc=f"Epoch {epoch}/{args.epochs}")
 
@@ -447,17 +484,30 @@ def main():
 
             optimizer.zero_grad(set_to_none=True)
             restored = model(degraded)
-            loss = loss_fn(restored, clean)
+            loss, l1_loss, mse_loss = compute_loss(
+                restored,
+                clean,
+                loss_type=args.loss_type,
+                mse_weight=args.mse_weight,
+            )
             loss.backward()
             optimizer.step()
 
             running_loss += loss.item()
-            progress.set_postfix(loss=f"{loss.item():.4f}")
+            running_l1 += l1_loss.item()
+            running_mse += mse_loss.item()
+            progress.set_postfix(
+                loss=f"{loss.item():.4f}",
+                l1=f"{l1_loss.item():.4f}",
+                mse=f"{mse_loss.item():.5f}",
+            )
             if 0 < args.max_steps_per_epoch <= step:
                 break
 
         scheduler.step()
         epoch_loss = running_loss / max(1, step_count)
+        epoch_l1 = running_l1 / max(1, step_count)
+        epoch_mse = running_mse / max(1, step_count)
         val_metrics = validate(
             model,
             val_loader,
@@ -473,12 +523,18 @@ def main():
                 f", rain={format_optional(val_metrics['val_psnr_rain'])}"
                 f", snow={format_optional(val_metrics['val_psnr_snow'])}"
             )
-        print(f"Epoch {epoch}: train_l1={epoch_loss:.6f}{val_text}, lr={lr:.8f}")
+        print(
+            f"Epoch {epoch}: train_loss={epoch_loss:.6f}, "
+            f"train_l1={epoch_l1:.6f}, train_mse={epoch_mse:.8f}"
+            f"{val_text}, lr={lr:.8f}"
+        )
 
         metric_history.append(
             {
                 "epoch": epoch,
-                "train_l1": epoch_loss,
+                "train_loss": epoch_loss,
+                "train_l1": epoch_l1,
+                "train_mse": epoch_mse,
                 "val_psnr": val_psnr,
                 "val_psnr_rain": (
                     val_metrics["val_psnr_rain"]
