@@ -137,10 +137,20 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def save_checkpoint(path, model, optimizer, scheduler, epoch, args, best_psnr):
+def save_checkpoint(
+    path,
+    model,
+    optimizer,
+    scheduler,
+    epoch,
+    args,
+    best_psnr,
+    best_loss,
+):
     checkpoint = {
         "epoch": epoch,
         "best_psnr": best_psnr,
+        "best_loss": best_loss,
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),
         "scheduler_state": scheduler.state_dict(),
@@ -450,8 +460,10 @@ def main():
     metric_history = load_metric_history(metrics_path, before_epoch=start_epoch)
     if args.resume is not None:
         best_psnr = checkpoint.get("best_psnr")
+        best_loss = checkpoint.get("best_loss")
     else:
         best_psnr = None
+        best_loss = None
     if best_psnr is None and metric_history:
         val_psnrs = [
             row["val_psnr"]
@@ -459,6 +471,13 @@ def main():
             if row.get("val_psnr") is not None
         ]
         best_psnr = max(val_psnrs) if val_psnrs else None
+    if best_loss is None and metric_history:
+        train_losses = [
+            row["train_loss"]
+            for row in metric_history
+            if row.get("train_loss") is not None
+        ]
+        best_loss = min(train_losses) if train_losses else None
 
     print(f"Device: {device}")
     print(f"Training pairs: {len(dataset)}")
@@ -554,11 +573,24 @@ def main():
         plot_loss_curve(loss_curve_path, metric_history)
         plot_psnr_curve(psnr_curve_path, metric_history)
 
-        is_best = val_psnr is not None and (
+        is_best_psnr = val_psnr is not None and (
             best_psnr is None or val_psnr > best_psnr
         )
-        if is_best:
-            best_psnr = val_psnr
+        is_best_loss = best_loss is None or epoch_loss < best_loss
+        next_best_psnr = val_psnr if is_best_psnr else best_psnr
+        next_best_loss = epoch_loss if is_best_loss else best_loss
+
+        if is_best_psnr:
+            save_checkpoint(
+                output_dir / "best_psnr.pt",
+                model,
+                optimizer,
+                scheduler,
+                epoch,
+                args,
+                next_best_psnr,
+                next_best_loss,
+            )
             save_checkpoint(
                 output_dir / "best.pt",
                 model,
@@ -566,8 +598,24 @@ def main():
                 scheduler,
                 epoch,
                 args,
-                best_psnr,
+                next_best_psnr,
+                next_best_loss,
             )
+
+        if is_best_loss:
+            save_checkpoint(
+                output_dir / "best_loss.pt",
+                model,
+                optimizer,
+                scheduler,
+                epoch,
+                args,
+                next_best_psnr,
+                next_best_loss,
+            )
+
+        best_psnr = next_best_psnr
+        best_loss = next_best_loss
 
         save_checkpoint(
             output_dir / "latest.pt",
@@ -577,6 +625,7 @@ def main():
             epoch,
             args,
             best_psnr,
+            best_loss,
         )
         if epoch % args.save_every == 0:
             save_checkpoint(
@@ -587,6 +636,7 @@ def main():
                 epoch,
                 args,
                 best_psnr,
+                best_loss,
             )
 
 

@@ -119,6 +119,8 @@ Training writes the epoch loss log and the report-ready loss curve here:
 ```text
 runs/promptir_baseline/latest.pt
 runs/promptir_baseline/best.pt
+runs/promptir_baseline/best_psnr.pt
+runs/promptir_baseline/best_loss.pt
 runs/promptir_baseline/epoch_010.pt
 runs/promptir_baseline/epoch_020.pt
 runs/promptir_baseline/metrics.csv
@@ -127,8 +129,10 @@ runs/promptir_baseline/psnr_curve.png
 ```
 
 By default, `latest.pt` is overwritten every epoch, `best.pt` is overwritten
-when validation PSNR improves, and numbered checkpoints are saved every 10
-epochs. Change the interval with `--save-every`.
+when validation PSNR improves, `best_psnr.pt` stores the highest validation
+PSNR checkpoint, `best_loss.pt` stores the lowest training loss checkpoint, and
+numbered checkpoints are saved every 10 epochs. Change the interval with
+`--save-every`.
 
 `metrics.csv` records overall validation PSNR plus separate rain/snow validation
 PSNR columns:
