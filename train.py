@@ -28,6 +28,7 @@ METRIC_FIELDS = [
     "train_loss",
     "train_l1",
     "train_mse",
+    "train_grad",
     "val_psnr",
     "val_psnr_rain",
     "val_psnr_snow",
@@ -103,6 +104,9 @@ def parse_args():
         choices=["l1", "l1_mse", "mse"],
     )
     parser.add_argument("--mse-weight", type=float, default=1.0)
+    parser.add_argument("--grad-weight", type=float, default=0.0)
+    parser.add_argument("--grad-x-weight", type=float, default=1.0)
+    parser.add_argument("--grad-y-weight", type=float, default=1.0)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--rain-oversample", type=int, default=1)
     parser.add_argument("--val-ratio", type=float, default=0.1)
@@ -186,6 +190,11 @@ def load_metric_history(path, before_epoch):
                             if row.get("train_mse") not in (None, "")
                             else None
                         ),
+                        "train_grad": (
+                            float(row["train_grad"])
+                            if row.get("train_grad") not in (None, "")
+                            else None
+                        ),
                         "val_psnr": (
                             float(row["val_psnr"])
                             if row.get("val_psnr") not in (None, "")
@@ -215,9 +224,33 @@ def save_metric_history(path, history):
         writer.writerows(history)
 
 
-def compute_loss(restored, clean, loss_type, mse_weight):
+def image_gradient_loss(restored, clean, x_weight=1.0, y_weight=1.0):
+    restored_x = restored[:, :, :, 1:] - restored[:, :, :, :-1]
+    clean_x = clean[:, :, :, 1:] - clean[:, :, :, :-1]
+    restored_y = restored[:, :, 1:, :] - restored[:, :, :-1, :]
+    clean_y = clean[:, :, 1:, :] - clean[:, :, :-1, :]
+    grad_x_loss = torch.nn.functional.l1_loss(restored_x, clean_x)
+    grad_y_loss = torch.nn.functional.l1_loss(restored_y, clean_y)
+    return x_weight * grad_x_loss + y_weight * grad_y_loss
+
+
+def compute_loss(
+    restored,
+    clean,
+    loss_type,
+    mse_weight,
+    grad_weight,
+    grad_x_weight,
+    grad_y_weight,
+):
     l1_loss = torch.nn.functional.l1_loss(restored, clean)
     mse_loss = torch.nn.functional.mse_loss(restored, clean)
+    grad_loss = image_gradient_loss(
+        restored,
+        clean,
+        x_weight=grad_x_weight,
+        y_weight=grad_y_weight,
+    )
     if loss_type == "l1":
         loss = l1_loss
     elif loss_type == "l1_mse":
@@ -226,7 +259,8 @@ def compute_loss(restored, clean, loss_type, mse_weight):
         loss = mse_loss
     else:
         raise ValueError(f"Unsupported loss type: {loss_type}")
-    return loss, l1_loss, mse_loss
+    loss = loss + grad_weight * grad_loss
+    return loss, l1_loss, mse_loss, grad_loss
 
 
 def plot_loss_curve(path, history):
@@ -494,12 +528,19 @@ def main():
     print(f"Loss curve: {loss_curve_path}")
     print(f"PSNR curve: {psnr_curve_path}")
     print(f"Loss type: {args.loss_type}, mse_weight: {args.mse_weight}")
+    print(
+        "Gradient loss: "
+        f"weight={args.grad_weight}, "
+        f"x_weight={args.grad_x_weight}, "
+        f"y_weight={args.grad_y_weight}"
+    )
 
     for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         running_loss = 0.0
         running_l1 = 0.0
         running_mse = 0.0
+        running_grad = 0.0
         step_count = 0
         progress = tqdm(loader, desc=f"Epoch {epoch}/{args.epochs}")
 
@@ -510,11 +551,14 @@ def main():
 
             optimizer.zero_grad(set_to_none=True)
             restored = model(degraded)
-            loss, l1_loss, mse_loss = compute_loss(
+            loss, l1_loss, mse_loss, grad_loss = compute_loss(
                 restored,
                 clean,
                 loss_type=args.loss_type,
                 mse_weight=args.mse_weight,
+                grad_weight=args.grad_weight,
+                grad_x_weight=args.grad_x_weight,
+                grad_y_weight=args.grad_y_weight,
             )
             loss.backward()
             optimizer.step()
@@ -522,10 +566,12 @@ def main():
             running_loss += loss.item()
             running_l1 += l1_loss.item()
             running_mse += mse_loss.item()
+            running_grad += grad_loss.item()
             progress.set_postfix(
                 loss=f"{loss.item():.4f}",
                 l1=f"{l1_loss.item():.4f}",
                 mse=f"{mse_loss.item():.5f}",
+                grad=f"{grad_loss.item():.4f}",
             )
             if 0 < args.max_steps_per_epoch <= step:
                 break
@@ -534,6 +580,7 @@ def main():
         epoch_loss = running_loss / max(1, step_count)
         epoch_l1 = running_l1 / max(1, step_count)
         epoch_mse = running_mse / max(1, step_count)
+        epoch_grad = running_grad / max(1, step_count)
         val_metrics = validate(
             model,
             val_loader,
@@ -552,6 +599,7 @@ def main():
         print(
             f"Epoch {epoch}: train_loss={epoch_loss:.6f}, "
             f"train_l1={epoch_l1:.6f}, train_mse={epoch_mse:.8f}"
+            f", train_grad={epoch_grad:.6f}"
             f"{val_text}, lr={lr:.8f}"
         )
 
@@ -561,6 +609,7 @@ def main():
                 "train_loss": epoch_loss,
                 "train_l1": epoch_l1,
                 "train_mse": epoch_mse,
+                "train_grad": epoch_grad,
                 "val_psnr": val_psnr,
                 "val_psnr_rain": (
                     val_metrics["val_psnr_rain"]

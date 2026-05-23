@@ -113,6 +113,26 @@ python train.py \
   --rain-oversample 2
 ```
 
+To penalize residual rain streak edges, add a small directional gradient loss.
+For mostly vertical rain streaks, emphasize x-direction gradients because they
+capture left/right edges of vertical lines:
+
+```bash
+python train.py \
+  --dataset-root hw4_realse_dataset \
+  --output-dir runs/promptir_rain_over_grad \
+  --epochs 120 \
+  --batch-size 4 \
+  --patch-size 128 \
+  --num-workers 4 \
+  --device cuda \
+  --loss-type l1 \
+  --rain-oversample 2 \
+  --grad-weight 0.05 \
+  --grad-x-weight 2.0 \
+  --grad-y-weight 1.0
+```
+
 By default, 10% of the training pairs are held out for validation PSNR after
 each epoch. Change this with `--val-ratio`; set `--val-ratio 0` to disable
 validation.
@@ -153,7 +173,7 @@ interval with `--save-every`.
 PSNR columns:
 
 ```text
-epoch,train_loss,train_l1,train_mse,val_psnr,val_psnr_rain,val_psnr_snow,lr,steps
+epoch,train_loss,train_l1,train_mse,train_grad,val_psnr,val_psnr_rain,val_psnr_snow,lr,steps
 ```
 
 ### 5. Generate `pred.npz`
