@@ -591,16 +591,6 @@ def main():
                 next_best_psnr,
                 next_best_loss,
             )
-            save_checkpoint(
-                output_dir / "best.pt",
-                model,
-                optimizer,
-                scheduler,
-                epoch,
-                args,
-                next_best_psnr,
-                next_best_loss,
-            )
 
         if is_best_loss:
             save_checkpoint(

@@ -118,7 +118,6 @@ Training writes the epoch loss log and the report-ready loss curve here:
 
 ```text
 runs/promptir_baseline/latest.pt
-runs/promptir_baseline/best.pt
 runs/promptir_baseline/best_psnr.pt
 runs/promptir_baseline/best_loss.pt
 runs/promptir_baseline/epoch_010.pt
@@ -128,11 +127,10 @@ runs/promptir_baseline/loss_curve.png
 runs/promptir_baseline/psnr_curve.png
 ```
 
-By default, `latest.pt` is overwritten every epoch, `best.pt` is overwritten
-when validation PSNR improves, `best_psnr.pt` stores the highest validation
-PSNR checkpoint, `best_loss.pt` stores the lowest training loss checkpoint, and
-numbered checkpoints are saved every 10 epochs. Change the interval with
-`--save-every`.
+By default, `latest.pt` is overwritten every epoch, `best_psnr.pt` stores the
+highest validation PSNR checkpoint, `best_loss.pt` stores the lowest training
+loss checkpoint, and numbered checkpoints are saved every 10 epochs. Change the
+interval with `--save-every`.
 
 `metrics.csv` records overall validation PSNR plus separate rain/snow validation
 PSNR columns:
@@ -148,7 +146,7 @@ Run inference with the trained checkpoint:
 ```bash
 python infer.py \
   --dataset-root hw4_realse_dataset \
-  --checkpoint runs/promptir_baseline/best.pt \
+  --checkpoint runs/promptir_baseline/best_psnr.pt \
   --output pred.npz \
   --device cuda
 ```
@@ -158,7 +156,7 @@ If inference runs out of memory, use tiled inference:
 ```bash
 python infer.py \
   --dataset-root hw4_realse_dataset \
-  --checkpoint runs/promptir_baseline/best.pt \
+  --checkpoint runs/promptir_baseline/best_psnr.pt \
   --output pred.npz \
   --device cuda \
   --tile-size 256 \
