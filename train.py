@@ -17,6 +17,7 @@ from promptir.data import (
     HW4RainSnowTrainDataset,
     HW4RainSnowValDataset,
     build_paired_samples,
+    oversample_rain_samples,
     split_train_val_samples,
 )
 from promptir.model import PromptIR
@@ -103,6 +104,7 @@ def parse_args():
     )
     parser.add_argument("--mse-weight", type=float, default=1.0)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--rain-oversample", type=int, default=1)
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--val-batch-size", type=int, default=1)
     parser.add_argument("--val-max-images", type=int, default=0)
@@ -405,6 +407,10 @@ def main():
         val_ratio=args.val_ratio,
         seed=args.seed,
     )
+    train_samples = oversample_rain_samples(
+        train_samples,
+        rain_oversample=args.rain_oversample,
+    )
 
     dataset = HW4RainSnowTrainDataset(
         args.dataset_root,
@@ -482,6 +488,7 @@ def main():
     print(f"Device: {device}")
     print(f"Training pairs: {len(dataset)}")
     print(f"Validation pairs: {len(val_dataset) if val_dataset is not None else 0}")
+    print(f"Rain oversample: {args.rain_oversample}x")
     print(f"Checkpoints: {output_dir}")
     print(f"Metrics: {metrics_path}")
     print(f"Loss curve: {loss_curve_path}")

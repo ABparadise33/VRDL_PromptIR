@@ -96,6 +96,23 @@ python train.py \
   --mse-weight 1.0
 ```
 
+To focus training on the rain bottleneck, oversample only rain training pairs
+while keeping validation unchanged:
+
+```bash
+python train.py \
+  --dataset-root hw4_realse_dataset \
+  --output-dir runs/promptir_rain_oversample \
+  --epochs 120 \
+  --batch-size 4 \
+  --patch-size 128 \
+  --num-workers 4 \
+  --device cuda \
+  --loss-type l1_mse \
+  --mse-weight 1.0 \
+  --rain-oversample 2
+```
+
 By default, 10% of the training pairs are held out for validation PSNR after
 each epoch. Change this with `--val-ratio`; set `--val-ratio 0` to disable
 validation.

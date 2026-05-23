@@ -84,6 +84,30 @@ def split_train_val_samples(samples, val_ratio=0.1, seed=42):
     return train_samples, val_samples
 
 
+def degradation_from_sample(sample):
+    degraded_path, _ = sample
+    name = degraded_path.name
+    if name.startswith("rain-"):
+        return "rain"
+    if name.startswith("snow-"):
+        return "snow"
+    return "unknown"
+
+
+def oversample_rain_samples(samples, rain_oversample=1):
+    if rain_oversample < 1:
+        raise ValueError("--rain-oversample must be >= 1")
+    if rain_oversample == 1:
+        return list(samples)
+
+    oversampled = []
+    for sample in samples:
+        oversampled.append(sample)
+        if degradation_from_sample(sample) == "rain":
+            oversampled.extend([sample] * (rain_oversample - 1))
+    return oversampled
+
+
 def pad_if_smaller(array, patch_size):
     h, w = array.shape[:2]
     pad_h = max(0, patch_size - h)
